@@ -1,0 +1,4 @@
+# Ignore compiled tests
+
+main
+main.exe
