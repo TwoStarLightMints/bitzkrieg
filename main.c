@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
+#define CLEAR ' '
+
 // Used to get unbuffered character input from user, solution found from:
 // https://stackoverflow.com/questions/421860/capture-characters-from-standard-input-without-waiting-for-enter-to-be-pressed
 char getch() {
@@ -36,20 +38,65 @@ char getch() {
   return buf;
 }
 
+// Used to represent directions
+enum DIRECTIONS {
+  UP,
+  DOWN,
+  RIGHT,
+  LEFT,
+  UNINIT,
+};
+
+// Stores the body of the player
+enum PLAYER_STATE {
+  UP_OR = 'A',
+  DOWN_OR = 'v',
+  RIGHT_OR = '>',
+  LEFT_OR = '<',
+};
+
+// Stores the different cell types as labels
+enum CELL_TYPE {
+  ENTITY,
+  WALL,
+  SPACE,
+  DENSE,
+};
+
+// Used to couple the dimensions of the terminal
 struct dimension {
   int width;
   int height;
 };
 
+// Used to represent a point in a cartesian plane
 struct point {
   int x;
   int y;
 };
 
+// Dummy type to use in Cell type union
+typedef struct Wall {
+  char color;
+} Wall;
+
+typedef struct Space {
+  char color;
+} Space;
+
+typedef struct Entity {
+  char body;
+  enum DIRECTIONS orientation;
+} Entity;
+
 typedef struct Cell {
   struct point pos;
-  bool is_filled;
-  char color;
+  enum CELL_TYPE cell_type;
+  union {
+    Entity e;
+    Wall w;
+    Space s;
+  };
 } Cell;
 
 
@@ -57,8 +104,8 @@ typedef struct Cell {
 struct dimension get_dimensions() {
   struct winsize w;
 
-  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
 
+  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
   // At this time row - 2 provides enough separation from the sides of the terminal window as to be visually pleasing
   struct dimension wh = { w.ws_col, w.ws_row - 2 };
 
@@ -81,6 +128,40 @@ int from_point(struct point p, struct dimension bounds) {
 
 
 
+void place_cell(Cell c, Cell* board, struct dimension bounds) {
+  board[from_point(c.pos, bounds)] = c;
+}
+
+
+
+Cell create_cell(struct point pos, enum CELL_TYPE cell_type, char graphic) {
+  Cell cell; 
+
+  if (cell_type == WALL) {
+
+    cell.pos = pos;
+    cell.cell_type = cell_type;
+    cell.w.color = graphic;
+
+  } else if (cell_type == ENTITY) {
+
+    cell.pos = pos;
+    cell.cell_type = cell_type;
+    cell.e.body = graphic;
+
+  } else if (cell_type == SPACE) {
+
+    cell.pos = pos;
+    cell.cell_type = cell_type;
+    cell.s.color = graphic;
+
+  }
+
+  return cell;
+}
+
+
+
 Cell* create_board(struct dimension bounds) {
   const int SIZE = bounds.height * bounds.width;
 
@@ -91,20 +172,94 @@ Cell* create_board(struct dimension bounds) {
     // These are the bounds of the screen
     if (i % bounds.width == 0 || i / bounds.width == 0 || i % bounds.width == (bounds.width - 1) ||  i / bounds.width == (bounds.height - 1)) {
 
-      struct point p = to_point(i, bounds);
-      Cell c = { p, true, '#' };
-      board[i] = c;
+      board[i] = create_cell(to_point(i, bounds), WALL, '#');
 
     } else {
 
-      struct point p = to_point(i, bounds);
-      Cell c = { p, false, ' ' };
-      board[i] = c;
+      board[i] = create_cell(to_point(i, bounds), SPACE, CLEAR);
 
     }
   }
 
   return board;
+}
+
+
+
+void print_board(const Cell* board, struct dimension bounds) {
+  for (int i = 0; i < bounds.width * bounds.height; i++) {
+    const Cell curr = board[i];
+    switch (curr.cell_type) {
+      case SPACE:
+        printf("%c", curr.s.color);
+        break;
+      case ENTITY:
+        printf("%c", curr.e.body);
+        break;
+      case WALL:
+        printf("%c", curr.w.color);
+        break;
+      default:
+        goto CELL_TYPE_ERR;
+    }
+    if ((i + 1) % bounds.width == 0)
+      printf("\n");
+  }
+
+  return;
+
+  CELL_TYPE_ERR:
+    printf("Error: Invalid cell type passed\n");
+    exit(1);
+}
+
+
+
+int get_move_direction() {
+  int pref1 = getch();
+  int pref2 = getch();
+
+  int value = getch();
+
+  switch (value) {
+    case 65:
+      return UP;
+    case 66:
+      return DOWN;
+    case 67:
+      return RIGHT;
+    case 68:
+      return LEFT;
+    default:
+      return -1;
+  }
+}
+
+Cell move_player(Cell player) {
+    switch (get_move_direction()) {
+      case 0:
+        player.pos.y -= 1;
+        player.e.body = UP_OR;
+        player.e.orientation = UP;
+        break;
+      case 1:
+        player.pos.y += 1;
+        player.e.body = DOWN_OR;
+        player.e.orientation = DOWN;
+        break;
+      case 2:
+        player.pos.x += 1;
+        player.e.body = RIGHT_OR;
+        player.e.orientation = RIGHT;
+        break;
+      case 3:
+        player.pos.x -= 1;
+        player.e.body = LEFT_OR;
+        player.e.orientation = LEFT;
+        break;
+    }
+
+  return player;
 }
 
 
@@ -115,31 +270,13 @@ int main(int argc, char** argv) {
 
   Cell* board = create_board(bounds);
 
-  Cell player = { { (rand() % (bounds.width - 1)) + 1, (rand() % (bounds.height - 1)) + 1 }, true, '&' };
+  Cell player = { {bounds.width / 2, bounds.height / 2}, ENTITY, .e = { 'A', UNINIT } };
 
   board[from_point(player.pos, bounds)] = player;
 
-  while (1) {
-    printf("\033[2J");
+  print_board(board, bounds);
 
-    for (int i = 0; i < bounds.height * bounds.width; i++) {
-      printf("%c", board[i].color);
-      if ((i + 1) % bounds.width == 0) {
-        printf("\n");
-      }
-    }
-
-    Cell clear = { player.pos, false, ' ' };
-
-    board[from_point(player.pos, bounds)] = clear;
-
-    player.pos.x = (rand() % (bounds.width - 1)) + 1;
-    player.pos.y = (rand() % (bounds.height - 1)) + 1;
-
-    board[from_point(player.pos, bounds)] = player;
-
-    sleep(1);
-  }
+  free(board);
 
   return 0;
 }
